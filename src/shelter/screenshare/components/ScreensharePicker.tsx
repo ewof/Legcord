@@ -1,23 +1,13 @@
 import type { Node } from "@vencord/venmic";
 import { createSignal, For, onCleanup, Show } from "solid-js";
-import { Dropdown } from "../../settings/components/Dropdown.jsx";
 import { SegmentedControl } from "../../settings/components/SegmentedControl.jsx";
+import { type AudioSelection, normalizeAudioSelection, routeAudioSelection } from "../audioSelection.js";
+import { AudioPicker } from "./AudioPicker.jsx";
 import classes from "./ScreensharePicker.module.css";
 import { type IPCSources, SourceCard } from "./SourceCard.jsx";
 
 const {
-    ui: {
-        ModalRoot,
-        ModalBody,
-        ModalConfirmFooter,
-        ModalSizes,
-        ModalHeader,
-        Header,
-        HeaderTags,
-        Divider,
-        Checkbox,
-        showToast,
-    },
+    ui: { ModalRoot, ModalBody, ModalConfirmFooter, ModalSizes, ModalHeader, Header, HeaderTags, Checkbox, showToast },
     plugin: { store },
 } = shelter;
 
@@ -32,7 +22,10 @@ async function getVirtmic() {
 }
 
 const original = navigator.mediaDevices.getDisplayMedia;
+let captureAudioRequested = false;
 export async function patchNavigator(requestAudio = false) {
+    // The picker updates this while the original capture request is pending.
+    captureAudioRequested = requestAudio;
     navigator.mediaDevices.getDisplayMedia = async function (opts = {}) {
         if (requestAudio) opts.audio = true;
         const stream = await original.call(this, opts);
@@ -48,7 +41,6 @@ export async function patchNavigator(requestAudio = false) {
             frameRate: { ideal: store.fps, min: Math.min(15, store.fps) },
             width: { min: 640, ideal: width, max: width },
             height: { min: 480, ideal: height, max: height },
-            // @ts-expect-error non-standard but used by Chromium desktop capture
             advanced: [{ width, height }],
             // crop-and-scale so capture matches the picker resolution. "none" kept native
             // panel size (e.g. 2304x1440) and forced software/HW encode of full desktop.
@@ -57,6 +49,13 @@ export async function patchNavigator(requestAudio = false) {
         };
 
         if (video) {
+            video.addEventListener(
+                "ended",
+                () => {
+                    console.warn("[Screenshare] Display video track ended");
+                },
+                { once: true },
+            );
             try {
                 video.contentHint = contentHint;
             } catch {
@@ -85,25 +84,38 @@ export async function patchNavigator(requestAudio = false) {
                 });
         }
 
-        const virtmic_id = await getVirtmic();
+        const virtmic_id = captureAudioRequested && window.legcord.platform === "linux" ? await getVirtmic() : null;
         if (virtmic_id) {
-            stream.getAudioTracks().forEach((t) => {
-                stream.removeTrack(t);
-            });
-            const audio = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    deviceId: {
-                        exact: virtmic_id,
+            try {
+                const audio = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        deviceId: { exact: virtmic_id },
+                        autoGainControl: false,
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        channelCount: 2,
                     },
-                    autoGainControl: false,
-                    echoCancellation: false,
-                    noiseSuppression: false,
-                    channelCount: 2,
-                },
-            });
-            audio.getAudioTracks().forEach((t) => {
-                stream.addTrack(t);
-            });
+                });
+                stream.getAudioTracks().forEach((track) => {
+                    stream.removeTrack(track);
+                    track.stop();
+                });
+                audio.getAudioTracks().forEach((track) => {
+                    stream.addTrack(track);
+                });
+                video?.addEventListener(
+                    "ended",
+                    () =>
+                        audio.getTracks().forEach((track) => {
+                            track.stop();
+                        }),
+                    {
+                        once: true,
+                    },
+                );
+            } catch (error) {
+                console.warn("[Screenshare] Virtual microphone unavailable; continuing video capture:", error);
+            }
         }
 
         return stream;
@@ -116,7 +128,11 @@ export const ScreensharePicker = (props: {
     audioSources: Node[] | undefined;
 }) => {
     const [source, setSource] = createSignal("none");
-    const [audioSource, setAudioSource] = createSignal<Node | undefined>(undefined);
+    const [audioSelection, setAudioSelection] = createSignal(normalizeAudioSelection(store.audioSelection));
+    function saveAudioSelection(selection: AudioSelection) {
+        setAudioSelection(selection);
+        store.audioSelection = selection;
+    }
     const [name, setName] = createSignal("nothing...");
     const [audio, setAudio] = createSignal(false);
     if (props.sources.length === 1) {
@@ -125,25 +141,50 @@ export const ScreensharePicker = (props: {
     }
 
     const t = store.i18n;
-    function startScreenshare() {
-        if (source() === "") {
+    let submitted = false;
+    let starting = false;
+    async function startScreenshare() {
+        if (submitted || starting) return;
+        if (source() === "" || source() === "none") {
             showToast(t["screenshare-selectSource"], "error");
+            return;
         }
-
-        patchNavigator(audio());
-
-        window.legcord.screenshare.start(source(), name(), audio());
-
-        props.close();
+        starting = true;
+        // Shelter's confirmation footer closes synchronously. Commit the selection
+        // before awaiting audio routing so modal cleanup cannot cancel the request.
+        submitted = true;
+        try {
+            let captureAudio = audio();
+            if (window.legcord.platform === "linux") {
+                if (captureAudio) {
+                    if (props.audioSources === undefined)
+                        throw new Error(
+                            "Audio capture requires PipeWire. You can turn off Share Audio to stream video.",
+                        );
+                    captureAudio = await routeAudioSelection(audioSelection(), window.legcord.screenshare);
+                } else {
+                    await window.legcord.screenshare.venmicStop();
+                }
+            }
+            patchNavigator(captureAudio);
+            // Linux uses the selected Venmic mix, rather than a second system loopback.
+            window.legcord.screenshare.start(source(), name(), captureAudio && window.legcord.platform !== "linux");
+            props.close();
+        } catch (error) {
+            window.legcord.screenshare.start("none", "", false);
+            if (window.legcord.platform === "linux") void window.legcord.screenshare.venmicStop();
+            showToast(error instanceof Error ? error.message : String(error), "error");
+        } finally {
+            starting = false;
+        }
     }
 
     function closeAndSave() {
-        window.legcord.screenshare.start("none", "", false);
+        if (!submitted) {
+            submitted = true;
+            window.legcord.screenshare.start("none", "", false);
+        }
         props.close();
-    }
-
-    async function updateVenmicSource(source: Node) {
-        return await window.legcord.screenshare.venmicStart([source]);
     }
 
     onCleanup(closeAndSave);
@@ -238,27 +279,10 @@ export const ScreensharePicker = (props: {
                     </div>
 
                     <Show when={window.legcord.platform === "linux" && props.audioSources !== undefined && audio()}>
-                        <Divider mt mb />
-                        <Header tag={HeaderTags.H4}>Venmic</Header>
-                        <Dropdown
-                            value={audioSource()?.["node.name"] ?? "Venmic disabled"}
-                            onChange={(v) => {
-                                const source = props.audioSources!.find((node) => node["node.name"] === v);
-                                if (!source) return;
-                                setAudioSource(source);
-                                updateVenmicSource(source);
-                            }}
-                            limitHeight
-                            options={[
-                                {
-                                    label: t["screenshare-venmicDisabled"],
-                                    value: "Venmic disabled",
-                                },
-                                ...(props.audioSources?.map((s) => ({
-                                    label: s["node.name"],
-                                    value: s["node.name"],
-                                })) ?? []),
-                            ]}
+                        <AudioPicker
+                            sources={props.audioSources!}
+                            selection={audioSelection()}
+                            onChange={saveAudioSelection}
                         />
                     </Show>
                 </div>

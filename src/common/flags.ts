@@ -297,14 +297,26 @@ function applyPlatformVideoStack(base: Preset | undefined): Preset | undefined {
         case "win32":
             console.log("Windows HW video encode flags enabled");
             return mergePresets(preset, winVideoEncode);
-        case "linux":
+        case "linux": {
+            // Keep VA-API encoding independent from GPU desktop capture. On X11,
+            // ZeroCopyDesktopCapture can end the capture track when Go Live starts.
+            const capturePreset = {
+                ...preset,
+                enableFeatures: preset.enableFeatures.filter((feature) => feature !== "ZeroCopyDesktopCapture"),
+                disableFeatures: [...preset.disableFeatures, "ZeroCopyDesktopCapture"],
+            };
             if (getConfig("vaapi")) {
                 console.log("Linux VAAPI HW encode/decode flags enabled");
                 configureLinuxVaapiEnvironment();
-                return mergePresets(preset, linuxVaapi);
+                const hardwarePreset = mergePresets(capturePreset, linuxVaapi);
+                hardwarePreset.enableFeatures = hardwarePreset.enableFeatures.filter(
+                    (feature) => feature !== "ZeroCopyDesktopCapture",
+                );
+                return hardwarePreset;
             }
             console.log("Linux VAAPI off — forcing software WebRTC video encode");
-            return withoutLinuxHwEncode(mergePresets(preset, linuxSoftwareVideoEncode));
+            return withoutLinuxHwEncode(mergePresets(capturePreset, linuxSoftwareVideoEncode));
+        }
         default:
             // Other Unix-likes: keep decode baseline; enable generic HW encode.
             return mergePresets(preset, winVideoEncode);

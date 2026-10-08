@@ -57,6 +57,7 @@ type StreamConnection = {
 };
 
 let loggedEncoderForCurrentStream = false;
+let removeQualityIntercept: (() => void) | undefined;
 let reapplyTimers: ReturnType<typeof setTimeout>[] = [];
 let reapplyGeneration = 0;
 
@@ -301,6 +302,7 @@ function onStreamEnd(dispatch: StreamDispatch) {
         window.legcord.screenshare.venmicStop();
     }
     if (owner === currentUserId) {
+        console.warn(`[Screenshare] Local stream deleted; reason=${dispatch.reason ?? "unspecified"}`);
         loggedEncoderForCurrentStream = false;
         clearReapplyTimers();
     }
@@ -325,8 +327,8 @@ export function onLoad() {
         ));
     });
     patchNavigator();
-    intercept((dispatch) => {
-        if (dispatch.type === "MEDIA_ENGINE_SET_GO_LIVE_SOURCE") {
+    removeQualityIntercept = intercept((dispatch) => {
+        if (dispatch.type === "MEDIA_ENGINE_SET_GO_LIVE_SOURCE" && dispatch.settings) {
             console.log("Intercepted stream quality change dispatch", dispatch);
             dispatch.settings.qualityOptions = {
                 frameRate: store.fps,
@@ -342,6 +344,8 @@ export function onLoad() {
 
 export function onUnload() {
     clearReapplyTimers();
+    removeQualityIntercept?.();
+    removeQualityIntercept = undefined;
     dispatcher.unsubscribe("MEDIA_ENGINE_VIDEO_SOURCE_QUALITY_CHANGED", onStreamQualityChange);
     dispatcher.unsubscribe("STREAM_DELETE", onStreamEnd);
 }

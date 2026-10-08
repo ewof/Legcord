@@ -61,7 +61,7 @@ export function getRendererAudioServicePid() {
 }
 
 export type venmicListObject =
-    | { ok: true; targets: string[]; hasPipewirePulse: boolean }
+    | { ok: true; targets: Node[]; hasPipewirePulse: boolean }
     | { ok: false; isGlibCxxOutdated: boolean };
 
 export function registerVenmicIpc() {
@@ -108,7 +108,7 @@ export function registerVenmicIpc() {
             getConfig("audio") ?? {};
 
         const data: LinkData = {
-            include: [],
+            include: [{ "media.class": "Stream/Output/Audio" }],
             exclude: [{ "application.process.id": pid }, ...exclude],
             only_speakers: onlySpeakers ?? false,
             ignore_devices: ignoreDevices ?? false,

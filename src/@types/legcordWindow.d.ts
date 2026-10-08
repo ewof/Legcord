@@ -53,6 +53,12 @@ export interface LegcordWindow {
         toggleKeybind: (id: string) => void;
         removeKeybind: (id: string) => void;
     };
+    clipboard: {
+        writeText: (text: string) => Promise<void>;
+        writeImage: (dataUrl: string) => Promise<void>;
+        readText: () => Promise<string>;
+        read: () => Promise<{ text: string; image: string | null }>;
+    };
     touchbar: {
         setVoiceTouchbar: (state: boolean) => void;
         setVoiceState: (mute: boolean, deafen: boolean) => void;

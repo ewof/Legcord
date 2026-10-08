@@ -6,7 +6,6 @@ import type { LegcordWindow } from "../../@types/legcordWindow.d.ts";
 import type { Settings } from "../../@types/settings.js";
 import type { ThemeManifest } from "../../@types/themeManifest.js";
 import type { AppliedFlagsOutput } from "../../main.js";
-import type { venmicListObject } from "../venmic.js";
 
 interface IPCSources {
     id: string;
@@ -56,6 +55,14 @@ contextBridge.exposeInMainWorld("legcord", {
         openGPUInfo: () => ipcRenderer.send("openGPUInfo"),
         dumpFlags: () => ipcRenderer.sendSync("dumpFlags") as AppliedFlagsOutput,
     },
+    // Page clipboard writes go through the main process so they are not cancelled
+    // when the Discord window loses focus mid-await.
+    clipboard: {
+        writeText: (text: string) => ipcRenderer.invoke("legcord:clipboard-write-text", text) as Promise<void>,
+        writeImage: (dataUrl: string) => ipcRenderer.invoke("legcord:clipboard-write-image", dataUrl) as Promise<void>,
+        readText: () => ipcRenderer.invoke("legcord:clipboard-read-text") as Promise<string>,
+        read: () => ipcRenderer.invoke("legcord:clipboard-read") as Promise<{ text: string; image: string | null }>,
+    },
     touchbar: {
         setVoiceTouchbar: (state: boolean) => ipcRenderer.send("setVoiceTouchbar", state),
         setVoiceState: (mute: boolean, deafen: boolean) => ipcRenderer.send("setVoiceState", mute, deafen),
@@ -79,10 +86,7 @@ contextBridge.exposeInMainWorld("legcord", {
         },
         start: (source: string, name: string, audio: boolean) =>
             ipcRenderer.send("startScreenshare", source, name, audio),
-        venmicStart: async (include: Node[]) =>
-            await ipcRenderer.invoke("venmicStart", include).then((result: venmicListObject) => {
-                return result as venmicListObject;
-            }),
+        venmicStart: async (include: Node[]) => await ipcRenderer.invoke("venmicStart", include),
         venmicSystemStart: async (exclude: Node[]) =>
             await ipcRenderer.invoke("venmicSystemStart", exclude).then((result: boolean) => {
                 return result as boolean;

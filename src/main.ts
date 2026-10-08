@@ -365,38 +365,28 @@ if (!app.requestSingleInstanceLock() && getConfig("multiInstance") === false) {
         } else {
             await init();
         }
-        session.defaultSession.setPermissionRequestHandler(async (_webContents, permission, callback) => {
+        session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
             switch (permission) {
                 case "fullscreen":
                 case "notifications":
-                    callback(true);
-                    break;
                 case "clipboard-sanitized-write":
+                case "display-capture":
                     callback(true);
                     break;
                 case "media": {
                     if (process.platform === "darwin") {
                         console.log(`microphone access: ${systemPreferences.getMediaAccessStatus("microphone")}`);
                         console.log(`camera access: ${systemPreferences.getMediaAccessStatus("camera")}`);
-                        callback(
-                            await new Promise<boolean>((resolve, reject) => {
-                                systemPreferences.askForMediaAccess("microphone").then((isGranted) => {
-                                    if (!isGranted) {
-                                        console.error("Microphone permission rejected by OS");
-                                        reject();
-                                        return;
-                                    }
-                                });
-                                systemPreferences.askForMediaAccess("camera").then((isGranted) => {
-                                    if (!isGranted) {
-                                        console.error("Camera permission rejected by OS");
-                                        reject();
-                                        return;
-                                    }
-                                });
-                                resolve(true);
-                            }),
-                        );
+                        void Promise.all([
+                            systemPreferences.askForMediaAccess("microphone"),
+                            systemPreferences.askForMediaAccess("camera"),
+                        ])
+                            .then(([microphone, camera]) => {
+                                if (!microphone) console.error("Microphone permission rejected by OS");
+                                if (!camera) console.error("Camera permission rejected by OS");
+                                callback(microphone || camera);
+                            })
+                            .catch(() => callback(false));
                         break;
                     }
                     callback(true);

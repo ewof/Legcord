@@ -22,6 +22,23 @@ async function inject() {
                 await webFrame.executeJavaScript(`(()=>{
                 const SHELTER_INJECTOR_PLUGINS = ${JSON.stringify(requiredPlugins)};
                 ${bundle.js}
+                // Shelter snapshots plugin IDs before awaiting updates. Removing
+                // legacy entries during startup invalidates that snapshot and
+                // prevents the remaining plugins (including the picker) loading.
+                let cleanupAttempts = 0;
+                const cleanupLegacyPlugins = setInterval(() => {
+                    const plugins = window.shelter?.plugins;
+                    if (++cleanupAttempts > 300) {
+                        clearInterval(cleanupLegacyPlugins);
+                        return;
+                    }
+                    if (!plugins || !Object.keys(SHELTER_INJECTOR_PLUGINS)
+                        .every(id => id in plugins.loadedPlugins())) return;
+                    clearInterval(cleanupLegacyPlugins);
+                    for (const id of ["armcord-settings", "armcord-screenshare"]) {
+                        if (id in plugins.installedPlugins()) plugins.removePlugin(id);
+                    }
+                }, 100);
             })()`);
             }
         });

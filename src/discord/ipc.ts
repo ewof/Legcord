@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Game } from "arrpc";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ClipboardItem, clipboard, dialog, ipcMain, nativeImage, shell } from "electron";
 import isDev from "electron-is-dev";
 import type { Keybind } from "../@types/keybind.js";
 import type { Settings } from "../@types/settings.js";
@@ -372,14 +372,45 @@ export function registerIpc(passedWindow: BrowserWindow): void {
     });
     ipcMain.on("copyDebugInfo", () => {
         const settingsFileContent = JSON.stringify(getEntireConfig(), null, 4);
-        clipboard.writeText(
-            `**OS:** ${os.platform()} ${os.version()}\n**Architecture:** ${os.arch()}\n**Legcord version:** ${getVersion()}\n**Electron version:** ${
-                process.versions.electron
-            }\n\`${settingsFileContent}\``,
-        );
+        void clipboard
+            .writeText(
+                `**OS:** ${os.platform()} ${os.version()}\n**Architecture:** ${os.arch()}\n**Legcord version:** ${getVersion()}\n**Electron version:** ${
+                    process.versions.electron
+                }\n\`${settingsFileContent}\``,
+            )
+            .catch(console.error);
     });
     ipcMain.on("copyGPUInfo", () => {
-        clipboard.writeText(JSON.stringify(app.getGPUFeatureStatus()));
+        void clipboard.writeText(JSON.stringify(app.getGPUFeatureStatus())).catch(console.error);
+    });
+    ipcMain.handle("legcord:clipboard-write-text", (_event, text: unknown) => {
+        if (typeof text !== "string" || text.length > 2_000_000) throw new Error("Invalid clipboard text");
+        return clipboard.writeText(text);
+    });
+    ipcMain.handle("legcord:clipboard-write-image", async (_event, dataUrl: unknown) => {
+        if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/") || dataUrl.length > 25_000_000)
+            throw new Error("Invalid clipboard image");
+        const image = nativeImage.createFromDataURL(dataUrl);
+        if (image.isEmpty()) throw new Error("Unable to decode clipboard image");
+        await clipboard.write([
+            new ClipboardItem({
+                "image/png": new Blob([new Uint8Array(image.toPNG())], { type: "image/png" }),
+            }),
+        ]);
+    });
+    ipcMain.handle("legcord:clipboard-read-text", () => clipboard.readText());
+    ipcMain.handle("legcord:clipboard-read", async () => {
+        let text = "";
+        let image: string | null = null;
+        for (const item of await clipboard.read()) {
+            if (item.types.includes("text/plain")) text = await ((await item.getType("text/plain")) as Blob).text();
+            const type = item.types.find((type) => type.startsWith("image/"));
+            if (type) {
+                const blob = (await item.getType(type)) as Blob;
+                image = `data:${type};base64,${Buffer.from(await blob.arrayBuffer()).toString("base64")}`;
+            }
+        }
+        return { text, image };
     });
     ipcMain.on("openWebRTCInternals", () => {
         openChromeInternalsPage("chrome://webrtc-internals/", "WebRTC Internals");

@@ -109,3 +109,88 @@
     height: 18px;
     color: var(--interactive-icon-default);
 }
+
+.audioPicker {
+    margin-top: 12px;
+    padding: 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    background: var(--background-surface-higher);
+    color: var(--text-default);
+}
+
+.audioPicker summary {
+    cursor: pointer;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.audioToolbar {
+    display: flex;
+    gap: 8px;
+    margin: 12px 0;
+}
+
+.audioToolbar input {
+    flex: 1;
+    min-width: 0;
+}
+
+.audioToolbar input,
+.audioToolbar button {
+    padding: 8px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--background-surface-lowest);
+    color: var(--text-default);
+    font: inherit;
+}
+
+.audioToolbar button {
+    cursor: pointer;
+}
+
+.audioApps {
+    max-height: 180px;
+    overflow-y: auto;
+}
+
+.audioOption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 4px;
+    cursor: pointer;
+}
+
+.audioOption:hover {
+    background: var(--background-modifier-hover);
+}
+
+.audioOption span {
+    overflow-wrap: anywhere;
+}
+
+.audioOption small {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-muted);
+}
+
+.audioOption input {
+    accent-color: var(--brand-500, #5865f2);
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+
+.audioHint {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.audioError {
+    color: var(--text-danger);
+    font-size: 13px;
+}

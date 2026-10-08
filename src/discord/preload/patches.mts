@@ -1,8 +1,14 @@
 import { addScript, addStyle, injectJS } from "../../common/dom.js";
 import { sleep } from "../../common/sleep.js";
+import { installClipboard } from "./clipboard.js";
 
-const { ipcRenderer } = require("electron");
+const { ipcRenderer, contextBridge } = require("electron");
 const version = ipcRenderer.sendSync("displayVersion") as string;
+
+// Discord copies through navigator.clipboard, which Chromium rejects if the
+// document blurs before the promise settles. Route those calls through the
+// main-process clipboard so copy/paste finish even if the window is unfocused.
+contextBridge.executeInMainWorld({ func: installClipboard });
 
 {
     const script = document.createElement("script");
@@ -50,29 +56,46 @@ const version = ipcRenderer.sendSync("displayVersion") as string;
     var START_BR = "3000";
     // VideoToolbox (macOS) and Media Foundation (Windows) HW encode avoid OpenH264 CBP.
     var preferHwH264 = ${preferHwH264 ? "true" : "false"};
-    function setOrAppendFmtpParam(sdp, key, value) {
-        var re = new RegExp(key + "=\\\\d+", "g");
-        if (sdp.indexOf(key + "=") !== -1) {
-            return sdp.replace(re, key + "=" + value);
-        }
-        return sdp.replace(/(a=fmtp:\\d+ [^\\r\\n]*)/g, function (line) {
-            if (line.indexOf(key + "=") !== -1) return line;
-            return line + ";" + key + "=" + value;
+    function setOrAppendFmtpParam(parameters, key, value) {
+        var parts = parameters.split(";");
+        var found = false;
+        parts = parts.map(function (part) {
+            if (part.trim().indexOf(key + "=") !== 0) return part;
+            found = true;
+            return key + "=" + value;
         });
+        if (!found) parts.push(key + "=" + value);
+        return parts.join(";");
     }
     function mungeSdp(sdp) {
         if (!sdp || typeof sdp !== "string") return sdp;
-        var out = sdp;
-        // Chromium uses OpenH264 for Constrained Baseline (42e0xx). Rewrite to Baseline
-        // (4200xx) so VideoToolbox / Media Foundation HW H.264 can be selected.
-        // See discuss-webrtc: CBP uses software encoder for historical reasons.
-        if (preferHwH264) {
-            out = out.replace(/profile-level-id=42e0([0-9a-fA-F]{2})/gi, "profile-level-id=4200$1");
-        }
-        out = setOrAppendFmtpParam(out, "x-google-max-bitrate", CAP);
-        out = setOrAppendFmtpParam(out, "x-google-min-bitrate", MIN_BR);
-        out = setOrAppendFmtpParam(out, "x-google-start-bitrate", START_BR);
-        return out;
+        var lines = sdp.split(/\\r?\\n/);
+        var video = false;
+        var payloads = new Set();
+        // Restrict bitrate parameters to video codecs. Applying these to Opus
+        // produces conflicting payload definitions in bundled audio sections.
+        lines.forEach(function (line) {
+            if (line.indexOf("m=") === 0) video = line.indexOf("m=video ") === 0;
+            if (!video || line.indexOf("a=rtpmap:") !== 0) return;
+            var fields = line.slice(9).split(" ");
+            var codec = (fields[1] || "").split("/")[0].toUpperCase();
+            if (["H264", "H265", "VP8", "VP9", "AV1"].includes(codec)) payloads.add(fields[0]);
+        });
+        video = false;
+        var out = lines.map(function (line) {
+            if (line.indexOf("m=") === 0) video = line.indexOf("m=video ") === 0;
+            if (!video || line.indexOf("a=fmtp:") !== 0) return line;
+            var space = line.indexOf(" ");
+            var payload = line.slice(7, space);
+            if (!payloads.has(payload)) return line;
+            var parameters = line.slice(space + 1);
+            if (preferHwH264) parameters = parameters.replace(/profile-level-id=42e0([0-9a-fA-F]{2})/gi, "profile-level-id=4200$1");
+            parameters = setOrAppendFmtpParam(parameters, "x-google-max-bitrate", CAP);
+            parameters = setOrAppendFmtpParam(parameters, "x-google-min-bitrate", MIN_BR);
+            parameters = setOrAppendFmtpParam(parameters, "x-google-start-bitrate", START_BR);
+            return line.slice(0, space + 1) + parameters;
+        });
+        return out.join(sdp.indexOf("\\r\\n") !== -1 ? "\\r\\n" : "\\n");
     }
     function wrapDescription(desc) {
         if (!desc || !desc.sdp) return desc;
@@ -142,8 +165,8 @@ const version = ipcRenderer.sendSync("displayVersion") as string;
 // See: https://github.com/electron/electron/issues/44502
 // Stopping prior audio streams on every new getUserMedia breaks Discord on Windows/Linux
 // (multiple object-shaped audio requests); keep that behavior only on darwin.
-{
-    const stopPrevAudioStreams = process.platform === "darwin";
+if (process.platform === "darwin") {
+    const stopPrevAudioStreams = true;
     const cameraFixScript = document.createElement("script");
     cameraFixScript.textContent = `(function() {
     var legcordStopPrevAudioStreams = ${stopPrevAudioStreams};
@@ -164,24 +187,28 @@ const version = ipcRenderer.sendSync("displayVersion") as string;
         list.length = 0;
     }
 
-    function trackStream(stream) {
+    function trackStream(stream, cameraRequest) {
         var ref = new WeakRef(stream);
-        if (stream.getVideoTracks().length > 0) _activeVideoStreams.push(ref);
+        if (cameraRequest && stream.getVideoTracks().length > 0) _activeVideoStreams.push(ref);
         if (legcordStopPrevAudioStreams && stream.getAudioTracks().length > 0) _activeAudioStreams.push(ref);
     }
 
     navigator.mediaDevices.getUserMedia = async function(constraints) {
         var hasVideo = constraints && constraints.video && typeof constraints.video !== "boolean";
+        // Legacy desktop capture uses getUserMedia too; it must never release cameras
+        // or be tracked as a camera that a later preview request can stop.
+        var desktopVideo = hasVideo && constraints.video.mandatory && constraints.video.mandatory.chromeMediaSource;
+        var cameraRequest = hasVideo && !desktopVideo && !!constraints.video.deviceId;
         var hasAudio = constraints && constraints.audio && typeof constraints.audio !== "boolean";
 
         // Release previous hardware when new request comes in for the same kind (audio: darwin only)
-        if (hasVideo && _activeVideoStreams.length > 0) stopTrackedStreams(_activeVideoStreams, "video");
+        if (cameraRequest && _activeVideoStreams.length > 0) stopTrackedStreams(_activeVideoStreams, "video");
         if (legcordStopPrevAudioStreams && hasAudio && _activeAudioStreams.length > 0) stopTrackedStreams(_activeAudioStreams, "audio");
 
-        var hasStringVideoDeviceId = hasVideo && typeof constraints.video.deviceId === "string";
+        var hasStringVideoDeviceId = cameraRequest && typeof constraints.video.deviceId === "string";
         if (!hasStringVideoDeviceId) {
             var stream = await _origGUM(constraints);
-            trackStream(stream);
+            trackStream(stream, cameraRequest);
             return stream;
         }
 
@@ -204,7 +231,7 @@ const version = ipcRenderer.sendSync("displayVersion") as string;
             }
             try {
                 var stream = await _origGUM(modified);
-                trackStream(stream);
+                trackStream(stream, cameraRequest);
                 return stream;
             } catch(e) {
                 lastErr = e;
@@ -218,7 +245,7 @@ const version = ipcRenderer.sendSync("displayVersion") as string;
             console.warn("[Legcord] Exact deviceId failed, falling back to ideal:", lastErr.name, lastErr.message);
         }
         var fallbackStream = await _origGUM(constraints);
-        trackStream(fallbackStream);
+        trackStream(fallbackStream, cameraRequest);
         return fallbackStream;
     };
 })();`;
@@ -254,10 +281,6 @@ async function load() {
         });
         })();
         `);
-        addScript(`
-        shelter.plugins.removePlugin("armcord-settings")
-        shelter.plugins.removePlugin("armcord-screenshare")
-    `);
         if (ipcRenderer.sendSync("getConfig", "disableAutogain")) {
             injectJS("legcord://assets/js/disableAutogain.js");
         }

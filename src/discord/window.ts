@@ -5,6 +5,7 @@ import {
     app,
     BrowserWindow,
     type BrowserWindowConstructorOptions,
+    ClipboardItem,
     clipboard,
     dialog,
     type MessageBoxOptions,
@@ -97,6 +98,11 @@ async function copyImageFromContext(
     parameters: { srcURL: string; x: number; y: number },
     win?: BrowserWindow,
 ): Promise<void> {
+    // Copy the already decoded image instead of downloading the attachment again.
+    if (win && !win.isDestroyed()) {
+        win.webContents.copyImageAt(parameters.x, parameters.y);
+        return;
+    }
     if (parameters.srcURL) {
         try {
             const response = await net.fetch(parameters.srcURL);
@@ -104,7 +110,11 @@ async function copyImageFromContext(
 
             const image = nativeImage.createFromBuffer(Buffer.from(await response.arrayBuffer()));
             if (!image.isEmpty()) {
-                clipboard.writeImage(image);
+                await clipboard.write([
+                    new ClipboardItem({
+                        "image/png": new Blob([new Uint8Array(image.toPNG())], { type: "image/png" }),
+                    }),
+                ]);
                 return;
             }
         } catch (error) {
@@ -149,6 +159,15 @@ contextMenu({
     ],
 });
 function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
+    passedWindow.webContents.on("console-message", (details) => {
+        if (
+            details.message.startsWith("[Screenshare]") ||
+            ((details.level === "warning" || details.level === "error") &&
+                /capture|webrtc|encoder/i.test(details.message))
+        ) {
+            console.log(`[Renderer:${details.level}] ${details.message}`);
+        }
+    });
     createTray();
     if (getWindowState("isMaximized") ?? false) {
         passedWindow.setSize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT); //just so the whole thing doesn't cover whole screen
@@ -267,12 +286,30 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
 
     registerCustomHandler();
 
-    passedWindow.webContents.session.webRequest.onBeforeRequest((details, callback) => {
-        if (isTelemetryBlockedUrl(details.url) || isBlockedLocalhostWebSocket(details.url)) {
-            return callback({ cancel: true });
-        }
-        return callback({});
-    });
+    // Unfiltered onBeforeRequest runs in the main process for every image and API
+    // call. During a server switch that queues hundreds of requests behind this
+    // process and the whole UI waits. The callback still decides what to cancel.
+    passedWindow.webContents.session.webRequest.onBeforeRequest(
+        {
+            urls: [
+                "*://*.sentry.io/*",
+                "*://sentry.io/*",
+                "*://*.nel.cloudflare.com/*",
+                "*://nel.cloudflare.com/*",
+                "*://*/api/*/science*",
+                "ws://127.0.0.1/*",
+                "ws://localhost/*",
+                "wss://127.0.0.1/*",
+                "wss://localhost/*",
+            ],
+        },
+        (details, callback) => {
+            if (isTelemetryBlockedUrl(details.url) || isBlockedLocalhostWebSocket(details.url)) {
+                return callback({ cancel: true });
+            }
+            return callback({});
+        },
+    );
 
     // fix UMG video playback
     passedWindow.webContents.session.webRequest.onBeforeSendHeaders(
