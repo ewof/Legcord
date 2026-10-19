@@ -33,7 +33,7 @@ export async function patchNavigator(requestAudio = false) {
         const height = store.resolution;
 
         // Keep continuous frame delivery for real-time screen sharing.
-        const contentHint = store.fps >= 30 ? "motion" : "detail";
+        const contentHint = "motion";
 
         const stream_constraints: MediaTrackConstraints = {
             frameRate: { ideal: store.fps, min: Math.min(15, store.fps) },

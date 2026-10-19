@@ -32,3 +32,35 @@ test("1080p30 does not retain a low startup target as the operating quality", ()
     assert.equal(connection.videoStreamParameters[0].maxResolution.height, 1080);
     assert.equal(connection.videoStreamParameters[0].maxFrameRate, 30);
 });
+
+test("changing quality updates an existing 15-fps capture track as well as RTP", async () => {
+    let applied;
+    let sent;
+    const sender = {
+        track: {
+            kind: "video",
+            contentHint: "detail",
+            getSettings: () => ({ frameRate: 15 }),
+            getConstraints: () => ({ width: { ideal: 1920 }, frameRate: { ideal: 15 } }),
+            applyConstraints: async (constraints) => {
+                applied = constraints;
+            },
+        },
+        getParameters: () => ({ encodings: [{ maxBitrate: 3500000 }] }),
+        setParameters: async (params) => {
+            sent = params;
+        },
+    };
+    const limits = source.slice(
+        source.indexOf("async function applySenderEncodeLimits("),
+        source.indexOf("async function logEncoderImplementation("),
+    );
+    const context = { getOutboundVideoSender: () => sender, log() {}, formatMbps: String, console };
+    await vm.runInNewContext(stripTypeScriptTypes(`${limits}\napplySenderEncodeLimits({},1080,30,9600000)`), context);
+    assert.equal(applied.frameRate.ideal, 30);
+    assert.equal(applied.frameRate.max, 30);
+    assert.equal(applied.width.ideal, 1920);
+    assert.equal(sender.track.contentHint, "motion");
+    assert.equal(sent.encodings[0].maxFramerate, 30);
+    assert.equal(sent.degradationPreference, "maintain-framerate");
+});

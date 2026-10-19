@@ -138,12 +138,25 @@ async function applySenderEncodeLimits(
         const sender = getOutboundVideoSender(streamConnection);
         if (!sender?.getParameters || !sender.setParameters) return;
 
+        // Quality changes can happen after capture starts. Updating RTP alone
+        // leaves the capture track at its previous frame rate.
+        const track = sender.track;
+        if (track?.kind === "video") {
+            track.contentHint = "motion";
+            if (track.getSettings().frameRate !== fps) {
+                await track.applyConstraints({
+                    ...track.getConstraints(),
+                    frameRate: { ideal: fps, min: Math.min(15, fps), max: fps },
+                });
+            }
+        }
+
         const params = sender.getParameters();
         if (!params.encodings?.length) {
             params.encodings = [{}];
         }
 
-        // Prefer continuous motion when adapting to available bandwidth.
+        // Keep the working motion adaptation while diagnosing encoder stalls.
         const smoothParams = params as RTCRtpSendParameters & { degradationPreference?: string };
         smoothParams.degradationPreference = "maintain-framerate";
         const before = params.encodings.map((e) => e.maxBitrate);
