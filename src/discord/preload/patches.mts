@@ -1,5 +1,7 @@
 import { addScript, addStyle, injectJS } from "../../common/dom.js";
 import { installClipboard } from "./clipboard.js";
+import { installH264Compatibility } from "./h264Compatibility.js";
+import { hideStreamMicrophone } from "./virtualMicrophone.js";
 
 const { ipcRenderer, webFrame, contextBridge } = require("electron");
 const version = ipcRenderer.sendSync("displayVersion") as string;
@@ -8,6 +10,10 @@ const version = ipcRenderer.sendSync("displayVersion") as string;
 // document blurs before the promise settles. Route those calls through the
 // main-process clipboard so copy/paste finish even if the window is unfocused.
 contextBridge.executeInMainWorld({ func: installClipboard });
+if (process.platform === "linux") contextBridge.executeInMainWorld({ func: hideStreamMicrophone });
+if (process.platform === "linux" && ipcRenderer.sendSync("getConfig", "vaapi")) {
+    contextBridge.executeInMainWorld({ func: installH264Compatibility });
+}
 
 {
     const script = document.createElement("script");
@@ -49,10 +55,8 @@ contextBridge.executeInMainWorld({ func: installClipboard });
     const bitrateScript = document.createElement("script");
     bitrateScript.textContent = `(function () {
     var CAP = "80000";
-    // Modest floor/start (kbps) so GCC probes above Discord's ~1–2.5 Mbps screenshare default
-    // without fighting congestion control. Max remains the hard ceiling.
-    var MIN_BR = "3000";
-    var START_BR = "3000";
+    // Raise the ceiling without imposing a minimum or startup bitrate.
+
     // VideoToolbox (macOS) and Media Foundation (Windows) HW encode avoid OpenH264 CBP.
     var preferHwH264 = ${preferHwH264 ? "true" : "false"};
     function setOrAppendFmtpParam(parameters, key, value) {
@@ -66,7 +70,7 @@ contextBridge.executeInMainWorld({ func: installClipboard });
         if (!found) parts.push(key + "=" + value);
         return parts.join(";");
     }
-    function mungeSdp(sdp) {
+    function mungeSdp(sdp, remote = false) {
         if (!sdp || typeof sdp !== "string") return sdp;
         var lines = sdp.split(/\\r?\\n/);
         var video = false;
@@ -89,16 +93,14 @@ contextBridge.executeInMainWorld({ func: installClipboard });
             if (!payloads.has(payload)) return line;
             var parameters = line.slice(space + 1);
             if (preferHwH264) parameters = parameters.replace(/profile-level-id=42e0([0-9a-fA-F]{2})/gi, "profile-level-id=4200$1");
-            parameters = setOrAppendFmtpParam(parameters, "x-google-max-bitrate", CAP);
-            parameters = setOrAppendFmtpParam(parameters, "x-google-min-bitrate", MIN_BR);
-            parameters = setOrAppendFmtpParam(parameters, "x-google-start-bitrate", START_BR);
+            if (!remote) parameters = setOrAppendFmtpParam(parameters, "x-google-max-bitrate", CAP);
             return line.slice(0, space + 1) + parameters;
         });
         return out.join(sdp.indexOf("\\r\\n") !== -1 ? "\\r\\n" : "\\n");
     }
-    function wrapDescription(desc) {
+    function wrapDescription(desc, remote = false) {
         if (!desc || !desc.sdp) return desc;
-        var sdp = mungeSdp(desc.sdp);
+        var sdp = mungeSdp(desc.sdp, remote);
         if (sdp === desc.sdp) return desc;
         try {
             return new RTCSessionDescription({ type: desc.type, sdp: sdp });
@@ -117,7 +119,7 @@ contextBridge.executeInMainWorld({ func: installClipboard });
     var origSRD = proto.setRemoteDescription;
     proto.setRemoteDescription = function (desc) {
         var args = Array.prototype.slice.call(arguments);
-        if (args.length > 0) args[0] = wrapDescription(args[0]);
+        if (args.length > 0) args[0] = wrapDescription(args[0], true);
         return origSRD.apply(this, args);
     };
     var origOffer = proto.createOffer;
@@ -274,7 +276,6 @@ async function waitForPageGlobal(name: string, timeoutMs = 10000): Promise<boole
     console.warn(`[Legcord] Timeout waiting for window.${name}, skipping dependent injections`);
     return false;
 }
-
 
 async function waitForBody(timeoutMs = 10000): Promise<boolean> {
     const start = Date.now();

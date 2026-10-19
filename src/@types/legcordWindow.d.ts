@@ -69,6 +69,7 @@ export interface LegcordWindow {
         isPowerSavingEnabled: () => boolean;
     };
     screenshare: {
+        getAudioDeviceId: () => Promise<string | null>;
         getSources: (
             callback: (event: Electron.IpcRendererEvent, sources: Array<IPCSources>, ...args: unknown[]) => void,
         ) => void;

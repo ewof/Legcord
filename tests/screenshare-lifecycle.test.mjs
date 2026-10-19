@@ -29,7 +29,17 @@ function setup(requestAudio) {
     };
     const context = {
         navigator: { mediaDevices },
-        window: { legcord: { platform: "linux" } },
+        window: {
+            legcord: {
+                platform: "linux",
+                screenshare: {
+                    getAudioDeviceId: async () => {
+                        await mediaDevices.enumerateDevices();
+                        return "missing";
+                    },
+                },
+            },
+        },
         store: { fps: 30, resolution: 1080 },
         console: { log() {}, warn() {}, error() {} },
     };

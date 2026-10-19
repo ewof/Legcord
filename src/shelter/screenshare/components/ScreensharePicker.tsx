@@ -13,9 +13,7 @@ const {
 
 async function getVirtmic() {
     try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioDevice = devices.find(({ label }) => label === "vencord-screen-share");
-        return audioDevice?.deviceId;
+        return await window.legcord.screenshare.getAudioDeviceId();
     } catch (_error) {
         return null;
     }
@@ -34,7 +32,7 @@ export async function patchNavigator(requestAudio = false) {
         const width = Math.round(store.resolution * (16 / 9));
         const height = store.resolution;
 
-        // Prefer smoothness at 30+ FPS; detail/text trades FPS for sharpness (hurts Go Live badly).
+        // Keep continuous frame delivery for real-time screen sharing.
         const contentHint = store.fps >= 30 ? "motion" : "detail";
 
         const stream_constraints: MediaTrackConstraints = {

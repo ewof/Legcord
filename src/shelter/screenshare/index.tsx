@@ -143,6 +143,9 @@ async function applySenderEncodeLimits(
             params.encodings = [{}];
         }
 
+        // Prefer continuous motion when adapting to available bandwidth.
+        const smoothParams = params as RTCRtpSendParameters & { degradationPreference?: string };
+        smoothParams.degradationPreference = "maintain-framerate";
         const before = params.encodings.map((e) => e.maxBitrate);
         for (const encoding of params.encodings) {
             // Raise whenever Discord/Chromium left a lower ceiling — never fight intentional
@@ -237,7 +240,7 @@ function patchStreamQuality(reason: string): boolean {
     const width = Math.round(store.resolution * (16 / 9));
     const height = store.resolution;
     const targetBitrate = targetBitrateFor(height, store.fps);
-    const bitrateMin = Math.round(targetBitrate * 0.8);
+    const bitrateMin = 150_000;
     const bitrateMax = Math.min(Math.round(targetBitrate * 1.2), BITRATE_CEILING);
 
     const params = streamConnection.videoStreamParameters?.[0];
@@ -252,6 +255,8 @@ function patchStreamQuality(reason: string): boolean {
     if (golive) {
         golive.bitrateMin = bitrateMin;
         golive.bitrateMax = bitrateMax;
+        // The quality manager treats this as the desired operating bitrate,
+        // not just a startup hint. Keep it aligned with the selected quality.
         golive.bitrateTarget = targetBitrate;
     }
 

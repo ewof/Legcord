@@ -40,10 +40,26 @@ async function inject() {
                     }
                 }, 100);
             })()`);
+                await webFrame.executeJavaScript(`new Promise(resolve => {
+                    const ids = ${JSON.stringify(Object.keys(requiredPlugins))};
+                    const deadline = Date.now() + 30000;
+                    function check() {
+                        const loaded = window.shelter?.plugins?.loadedPlugins();
+                        if (loaded && ids.every(id => id in loaded)) return resolve(true);
+                        if (Date.now() >= deadline) {
+                            console.error("[Legcord] Required Shelter plugins did not finish loading");
+                            return resolve(false);
+                        }
+                        setTimeout(check, 100);
+                    }
+                    check();
+                })`);
             }
         });
     } catch (e) {
         console.error(e);
     }
 }
-inject();
+// Third-party installers must not delete/reinstall Shelter entries while its
+// startup loop is still iterating a saved list of plugin IDs.
+export const shelterReady = inject();

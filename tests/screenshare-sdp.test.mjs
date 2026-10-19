@@ -6,13 +6,13 @@ import vm from "node:vm";
 const source = readFileSync(new URL("../src/discord/preload/patches.mts", import.meta.url), "utf8");
 const fragment = source.slice(
     source.indexOf('    var CAP = "80000";'),
-    source.indexOf("    function wrapDescription(desc)"),
+    source.indexOf("    function wrapDescription(desc,"),
 );
-function munge(sdp, hardware = false) {
+function munge(sdp, hardware = false, remote = false) {
     const context = { preferHwH264: hardware };
     const script = vm.runInNewContext(`\`${fragment}\``, context);
     vm.runInNewContext(script, context);
-    return context.mungeSdp(sdp);
+    return context.mungeSdp(sdp, remote);
 }
 const audio =
     "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\na=fmtp:111 minptime=10;useinbandfec=1\r\n";
@@ -33,4 +33,13 @@ test("reapplying the patch does not duplicate bitrate parameters", () => {
 test("H264 baseline preference respects platform setting", () => {
     assert.ok(munge(video).includes("profile-level-id=42e01f"));
     assert.ok(munge(video, true).includes("profile-level-id=42001f"));
+});
+
+test("remote answers preserve negotiated video bitrate parameters", () => {
+    assert.equal(munge(video, false, true), video);
+});
+test("local offers do not force minimum or startup bitrates", () => {
+    const result = munge(video);
+    assert.ok(!result.includes("x-google-min-bitrate="));
+    assert.ok(!result.includes("x-google-start-bitrate="));
 });

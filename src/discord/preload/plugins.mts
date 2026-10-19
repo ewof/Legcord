@@ -1,3 +1,5 @@
+import { shelterReady } from "./mods/shelter.mjs";
+
 const { ipcRenderer, webFrame } = require("electron");
 const { after, before, instead } = require("spitroast/dist/index.js");
 
@@ -165,6 +167,7 @@ function getRendererBootstrap(pluginId: string, pluginName: string, source: stri
 
 async function loadRendererPlugins() {
     const entries = (await ipcRenderer.invoke("plugins:get-runtime-entries", "renderer")) as RuntimeEntry[];
+    if (entries.length) await shelterReady;
     for (const entry of entries) {
         try {
             const source = (await ipcRenderer.invoke("plugins:get-runtime-script", entry.id, "renderer")) as

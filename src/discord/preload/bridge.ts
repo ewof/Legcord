@@ -79,6 +79,13 @@ contextBridge.exposeInMainWorld("legcord", {
             return result as string;
         }),
     screenshare: {
+        getAudioDeviceId: async () => {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            return (
+                devices.find((device) => device.kind === "audioinput" && device.label === "vencord-screen-share")
+                    ?.deviceId ?? null
+            );
+        },
         getSources: (
             callback: (event: Electron.IpcRendererEvent, sources: IPCSources[], ...args: unknown[]) => void,
         ) => {

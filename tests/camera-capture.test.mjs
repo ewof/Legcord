@@ -4,7 +4,10 @@ import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 
 const source = readFileSync(new URL("../src/discord/preload/patches.mts", import.meta.url), "utf8");
-const block = source.slice(source.indexOf("// Fix: Chromium on macOS"), source.indexOf("\nasync function load()"));
+const block = source.slice(
+    source.indexOf("// Fix: Chromium on macOS"),
+    source.indexOf("\nasync function waitForPageGlobal"),
+);
 function injectedScript(platform) {
     let script = null;
     runInNewContext(block, {
