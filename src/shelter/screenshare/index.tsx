@@ -86,7 +86,9 @@ function preferPlatformHwH264(streamConnection: StreamConnection): void {
     if (platform !== "darwin" && platform !== "win32") return;
     try {
         const sender = getOutboundVideoSender(streamConnection);
-        if (!sender?.setCodecPreferences || typeof RTCRtpSender.getCapabilities !== "function") return;
+        const pc = streamConnection.pc ?? streamConnection.peerConnection ?? streamConnection._pc;
+        const transceiver = pc?.getTransceivers?.().find((entry) => entry.sender === sender);
+        if (!transceiver?.setCodecPreferences || typeof RTCRtpSender.getCapabilities !== "function") return;
 
         const caps = RTCRtpSender.getCapabilities("video");
         if (!caps?.codecs?.length) return;
@@ -109,7 +111,7 @@ function preferPlatformHwH264(streamConnection: StreamConnection): void {
         };
 
         const preferred = [...caps.codecs].sort((a, b) => rank(a) - rank(b));
-        sender.setCodecPreferences(preferred);
+        transceiver.setCodecPreferences(preferred);
         const backend = platform === "darwin" ? "VideoToolbox" : "MediaFoundation";
         log(
             `Preferred ${backend} H264 codecs: ${preferred
@@ -130,7 +132,7 @@ function formatMbps(bps: number | undefined | null): string {
 /** Cap RTP framerate / bitrate ceiling without forcing scale (Discord adapts spatial layers). */
 async function applySenderEncodeLimits(
     streamConnection: StreamConnection,
-    _height: number,
+    height: number,
     fps: number,
     maxBitrate: number,
 ): Promise<void> {
@@ -142,12 +144,20 @@ async function applySenderEncodeLimits(
         // leaves the capture track at its previous frame rate.
         const track = sender.track;
         if (track?.kind === "video") {
-            track.contentHint = "motion";
-            if (track.getSettings().frameRate !== fps) {
+            try {
+                track.contentHint =
+                    store.streamQuality === "detail" ? "detail" : store.streamQuality === "motion" ? "motion" : "";
+                const width = Math.round(height * (16 / 9));
                 await track.applyConstraints({
-                    ...track.getConstraints(),
-                    frameRate: { ideal: fps, min: Math.min(15, fps), max: fps },
+                    frameRate: { ideal: fps, max: fps },
+                    width: { ideal: width, max: width },
+                    height: { ideal: height, max: height },
+                    // @ts-expect-error Chromium supports resizeMode on display tracks
+                    resizeMode: "crop-and-scale",
                 });
+            } catch (error) {
+                // Capture constraints are best-effort; still update the RTP limits.
+                console.warn("[Screenshare] Failed to update capture constraints:", error);
             }
         }
 
@@ -156,17 +166,18 @@ async function applySenderEncodeLimits(
             params.encodings = [{}];
         }
 
-        // Keep the working motion adaptation while diagnosing encoder stalls.
+        // Screen text and motion need different adaptation under CPU/network pressure.
         const smoothParams = params as RTCRtpSendParameters & { degradationPreference?: string };
-        smoothParams.degradationPreference = "maintain-framerate";
+        smoothParams.degradationPreference =
+            store.streamQuality === "detail"
+                ? "maintain-resolution"
+                : store.streamQuality === "motion"
+                  ? "maintain-framerate"
+                  : "balanced";
         const before = params.encodings.map((e) => e.maxBitrate);
         for (const encoding of params.encodings) {
-            // Raise whenever Discord/Chromium left a lower ceiling — never fight intentional
-            // downscales by forcing scaleResolutionDownBy.
-            const current = encoding.maxBitrate;
-            if (current == null || current < maxBitrate) {
-                encoding.maxBitrate = maxBitrate;
-            }
+            // Apply decreases too when the user selects a cheaper stream quality.
+            encoding.maxBitrate = maxBitrate;
             encoding.maxFramerate = fps;
         }
 

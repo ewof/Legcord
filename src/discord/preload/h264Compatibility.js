@@ -5,8 +5,10 @@
 export function installH264Compatibility() {
     const proto = globalThis.RTCRtpSender?.prototype;
     if (!proto?.createEncodedStreams || proto.__legcordH264Compatibility) return;
-    const transform = Object.getOwnPropertyDescriptor(proto, "transform");
-    if (transform && !transform.configurable) return;
+    // Preserve the native DAVE transform path on modern Chromium. Selecting the
+    // legacy API by deleting `transform` changes Discord's encryption pipeline.
+    // Only normalize frames when the browser itself requires the legacy API.
+    if ("transform" in proto) return;
     const original = proto.createEncodedStreams;
     proto.createEncodedStreams = function (...args) {
         const streams = original.apply(this, args);
@@ -64,8 +66,5 @@ export function installH264Compatibility() {
         // the readable, unencrypted video before DAVE receives it.
         return { readable, writable: streams.writable };
     };
-    // Discord already supports this transferable-stream API for DAVE. Select it
-    // on senders so normalization runs before encryption; keep receivers native.
-    if (transform) delete proto.transform;
     Object.defineProperty(proto, "__legcordH264Compatibility", { value: true });
 }

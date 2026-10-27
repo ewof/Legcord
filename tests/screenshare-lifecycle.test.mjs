@@ -162,3 +162,45 @@ test("confirmation footer closing during audio routing does not cancel capture",
     assert.equal(calls.length, 1);
     assert.deepEqual(calls[0], ["screen:347:0", "Screen 1", false]);
 });
+
+test("capture waits for resolution and FPS limits before returning the stream", async () => {
+    let finishConstraints;
+    let constraintsStarted;
+    const started = new Promise((resolve) => {
+        constraintsStarted = resolve;
+    });
+    let applied;
+    let returned = false;
+    const video = {
+        addEventListener() {},
+        getSettings: () => ({}),
+        applyConstraints: (constraints) => {
+            applied = constraints;
+            constraintsStarted();
+            return new Promise((resolve) => {
+                finishConstraints = resolve;
+            });
+        },
+    };
+    const stream = { getVideoTracks: () => [video] };
+    const mediaDevices = { getDisplayMedia: async () => stream };
+    runInNewContext(`${patch}\npatchNavigator(false);`, {
+        navigator: { mediaDevices },
+        window: { legcord: { platform: "linux" } },
+        store: { resolution: 720, fps: 30, streamQuality: "detail" },
+        console: { log() {}, warn() {}, error() {} },
+    });
+    const pending = mediaDevices.getDisplayMedia().then((value) => {
+        returned = true;
+        return value;
+    });
+    await started;
+    assert.equal(returned, false);
+    assert.equal(applied.frameRate.max, 30);
+    assert.equal(applied.width.max, 1280);
+    assert.equal(applied.height.max, 720);
+    assert.equal(applied.advanced, undefined);
+    finishConstraints();
+    assert.equal(await pending, stream);
+    assert.equal(video.contentHint, "detail");
+});

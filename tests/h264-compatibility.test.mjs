@@ -24,7 +24,6 @@ async function processFrames(frames) {
             };
         }
     }
-    Object.defineProperty(Sender.prototype, "transform", { configurable: true, get() {} });
     vm.runInNewContext(`(${installH264Compatibility.toString()})()`, {
         RTCRtpSender: Sender,
         TransformStream,
@@ -59,4 +58,19 @@ test("audio, delta frames, other codecs and already ordered H264 are unchanged",
     output.forEach((f, i) => {
         assert.equal(f.data, originals[i]);
     });
+});
+
+test("modern DAVE keeps its native transform and encoded-stream API intact", () => {
+    class Sender {
+        createEncodedStreams() {
+            throw new Error("legacy path must not run");
+        }
+    }
+    const native = Sender.prototype.createEncodedStreams;
+    const getter = () => undefined;
+    Object.defineProperty(Sender.prototype, "transform", { configurable: true, get: getter });
+    vm.runInNewContext(`(${installH264Compatibility.toString()})()`, { RTCRtpSender: Sender });
+    assert.equal(Object.getOwnPropertyDescriptor(Sender.prototype, "transform").get, getter);
+    assert.equal(Sender.prototype.createEncodedStreams, native);
+    assert.equal(Sender.prototype.__legcordH264Compatibility, undefined);
 });

@@ -55,7 +55,13 @@ test("changing quality updates an existing 15-fps capture track as well as RTP",
         source.indexOf("async function applySenderEncodeLimits("),
         source.indexOf("async function logEncoderImplementation("),
     );
-    const context = { getOutboundVideoSender: () => sender, log() {}, formatMbps: String, console };
+    const context = {
+        store: { streamQuality: "motion" },
+        getOutboundVideoSender: () => sender,
+        log() {},
+        formatMbps: String,
+        console,
+    };
     await vm.runInNewContext(stripTypeScriptTypes(`${limits}\napplySenderEncodeLimits({},1080,30,9600000)`), context);
     assert.equal(applied.frameRate.ideal, 30);
     assert.equal(applied.frameRate.max, 30);
@@ -63,4 +69,101 @@ test("changing quality updates an existing 15-fps capture track as well as RTP",
     assert.equal(sender.track.contentHint, "motion");
     assert.equal(sent.encodings[0].maxFramerate, 30);
     assert.equal(sent.degradationPreference, "maintain-framerate");
+});
+
+const limits = source.slice(
+    source.indexOf("async function applySenderEncodeLimits("),
+    source.indexOf("async function logEncoderImplementation("),
+);
+for (const [quality, hint, preference] of [
+    ["balanced", "", "balanced"],
+    ["detail", "detail", "maintain-resolution"],
+    ["motion", "motion", "maintain-framerate"],
+]) {
+    test(`${quality} updates capture resolution even when FPS is unchanged`, async () => {
+        let applied;
+        let sent;
+        const sender = {
+            track: {
+                kind: "video",
+                getSettings: () => ({ frameRate: 30, width: 3840, height: 2160 }),
+                applyConstraints: async (constraints) => {
+                    applied = constraints;
+                },
+            },
+            getParameters: () => ({ encodings: [{ maxBitrate: 25000000, scaleResolutionDownBy: 2 }] }),
+            setParameters: async (params) => {
+                sent = params;
+            },
+        };
+        const context = {
+            store: { streamQuality: quality },
+            getOutboundVideoSender: () => sender,
+            log() {},
+            formatMbps: String,
+            console,
+        };
+        await vm.runInNewContext(
+            stripTypeScriptTypes(`${limits}\napplySenderEncodeLimits({},720,30,4800000)`),
+            context,
+        );
+        assert.equal(applied.width.max, 1280);
+        assert.equal(applied.height.max, 720);
+        assert.equal(applied.frameRate.max, 30);
+        assert.equal(sender.track.contentHint, hint);
+        assert.equal(sent.degradationPreference, preference);
+        assert.equal(sent.encodings[0].maxBitrate, 4800000);
+        assert.equal(sent.encodings[0].scaleResolutionDownBy, 2);
+    });
+}
+test("capture constraint failure still applies RTP limits", async () => {
+    let sent;
+    const sender = {
+        track: {
+            kind: "video",
+            applyConstraints: async () => {
+                throw new Error("unsupported");
+            },
+        },
+        getParameters: () => ({ encodings: [{}] }),
+        setParameters: async (params) => {
+            sent = params;
+        },
+    };
+    await vm.runInNewContext(stripTypeScriptTypes(`${limits}\napplySenderEncodeLimits({},1080,30,9600000)`), {
+        store: {},
+        getOutboundVideoSender: () => sender,
+        log() {},
+        formatMbps: String,
+        console: { warn() {} },
+    });
+    assert.equal(sent.encodings[0].maxBitrate, 9600000);
+});
+test("hardware codec preference uses the sender's transceiver", () => {
+    let preferred;
+    const sender = {};
+    const codecs = [{ mimeType: "video/VP8" }, { mimeType: "video/H264", sdpFmtpLine: "profile-level-id=42001f" }];
+    const connection = {
+        pc: {
+            getTransceivers: () => [
+                {
+                    sender,
+                    setCodecPreferences: (value) => {
+                        preferred = value;
+                    },
+                },
+            ],
+        },
+    };
+    const code = source.slice(source.indexOf("function preferPlatformHwH264("), source.indexOf("function formatMbps("));
+    vm.runInNewContext(stripTypeScriptTypes(`${code}\npreferPlatformHwH264(connection)`), {
+        connection,
+        window: { legcord: { platform: "win32" } },
+        getOutboundVideoSender: () => sender,
+        RTCRtpSender: { getCapabilities: () => ({ codecs }) },
+        log() {},
+        console,
+    });
+    assert.equal(preferred[0].mimeType, "video/H264");
+    assert.equal(preferred.length, codecs.length);
 });

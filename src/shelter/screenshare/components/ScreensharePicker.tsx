@@ -32,14 +32,14 @@ export async function patchNavigator(requestAudio = false) {
         const width = Math.round(store.resolution * (16 / 9));
         const height = store.resolution;
 
-        // Keep continuous frame delivery for real-time screen sharing.
-        const contentHint = "motion";
+        // Let the encoder balance sharpness and motion unless the user chooses a priority.
+        const contentHint =
+            store.streamQuality === "detail" ? "detail" : store.streamQuality === "motion" ? "motion" : "";
 
         const stream_constraints: MediaTrackConstraints = {
-            frameRate: { ideal: store.fps, min: Math.min(15, store.fps) },
-            width: { min: 640, ideal: width, max: width },
-            height: { min: 480, ideal: height, max: height },
-            advanced: [{ width, height }],
+            frameRate: { ideal: store.fps, max: store.fps },
+            width: { ideal: width, max: width },
+            height: { ideal: height, max: height },
             // crop-and-scale so capture matches the picker resolution. "none" kept native
             // panel size (e.g. 2304x1440) and forced software/HW encode of full desktop.
             // @ts-expect-error Chromium supports resizeMode on display tracks
@@ -60,7 +60,7 @@ export async function patchNavigator(requestAudio = false) {
                 // contentHint is best-effort
             }
 
-            video
+            await video
                 .applyConstraints(stream_constraints)
                 .then(() => {
                     const settings = video.getSettings();
@@ -251,6 +251,22 @@ export const ScreensharePicker = (props: {
                                 ]}
                             />
                         </div>
+                    </div>
+                    <div class={classes.controlGroup}>
+                        <Header class={classes.header} tag={HeaderTags.H4}>
+                            Quality priority
+                        </Header>
+                        <SegmentedControl
+                            value={store.streamQuality ?? "balanced"}
+                            onChange={(value) => {
+                                store.streamQuality = value;
+                            }}
+                            options={[
+                                { label: "Balanced", value: "balanced" },
+                                { label: "Sharper text", value: "detail" },
+                                { label: "Smoother motion", value: "motion" },
+                            ]}
+                        />
                     </div>
                     <div class={classes.audioRow} style="margin-top: 12px;">
                         <div class={classes.audioLabel}>
